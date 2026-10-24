@@ -1126,6 +1126,11 @@ impl App {
     }
 
     fn fetch_subscription_usage_with_status(&mut self, preserve_status: bool) {
+        if tokscale_core::network::is_offline() {
+            self.usage_fetch_attempted = true;
+            self.set_status("Offline: showing cached usage; refresh requires online mode");
+            return;
+        }
         if self.usage_rx.is_some() {
             if preserve_status {
                 self.usage_fetch_preserve_status = true;
@@ -1224,6 +1229,9 @@ impl App {
     /// stats are missing or older than the cache TTL. Attempts are throttled
     /// so an offline machine or expired token does not retry on every tick.
     fn maybe_refresh_remote_stats(&mut self) {
+        if tokscale_core::network::is_offline() {
+            return;
+        }
         const RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
 
         if self.remote_stats_rx.is_some() {
@@ -1338,6 +1346,10 @@ impl App {
     }
 
     fn start_codex_login(&mut self) {
+        if tokscale_core::network::is_offline() {
+            self.set_status("Codex login is unavailable in offline mode");
+            return;
+        }
         if self.codex_login_rx.is_some() {
             self.set_status("Codex login already in progress");
             return;
@@ -1573,6 +1585,10 @@ impl App {
     }
 
     fn reset_codex_rate_limits(&mut self, account_id: &str) {
+        if tokscale_core::network::is_offline() {
+            self.set_status("Codex reset is unavailable in offline mode");
+            return;
+        }
         if self.codex_reset_rx.is_some() {
             self.set_status("Codex reset already in progress");
             return;
@@ -3161,6 +3177,7 @@ mod tests {
                 session_count: 1,
                 workspace_key: None,
                 workspace_label: None,
+                machine: None,
                 group_key: String::new(),
                 daily: Vec::new(),
             },
@@ -3175,6 +3192,7 @@ mod tests {
                 session_count: 1,
                 workspace_key: None,
                 workspace_label: None,
+                machine: None,
                 group_key: String::new(),
                 daily: Vec::new(),
             },
@@ -3217,6 +3235,7 @@ mod tests {
                 session_count: 1,
                 workspace_key: None,
                 workspace_label: None,
+                machine: None,
                 group_key: String::new(),
                 daily: Vec::new(),
             },
@@ -3231,6 +3250,7 @@ mod tests {
                 session_count: 1,
                 workspace_key: None,
                 workspace_label: None,
+                machine: None,
                 group_key: String::new(),
                 daily: Vec::new(),
             },
@@ -3272,6 +3292,7 @@ mod tests {
             session_count: 1,
             workspace_key: None,
             workspace_label: None,
+            machine: None,
             group_key: String::new(),
             daily: Vec::new(),
         }];
@@ -3584,6 +3605,7 @@ mod tests {
                 session_count: 1,
                 workspace_key: None,
                 workspace_label: None,
+                machine: None,
                 group_key: String::new(),
                 daily: Vec::new(),
             })
@@ -4269,6 +4291,7 @@ mod tests {
             client: "claude".to_string(),
             workspace_key: None,
             workspace_label: None,
+            machine: None,
             tokens: TokenBreakdown::default(),
             cost,
             performance: Default::default(),
@@ -4815,6 +4838,57 @@ mod tests {
 
         fs::write(&path, br#"{"tuiLightMode":true}"#).unwrap();
         assert!(make_app().theme.is_light());
+    }
+
+    #[test]
+    fn offline_tui_blocks_background_and_interactive_network_actions() {
+        if !settings_test_runs_in_child(
+            "offline_tui_blocks_background_and_interactive_network_actions",
+        ) {
+            return;
+        }
+        tokscale_core::network::go_offline();
+        let mut app = make_app();
+        app.usage_fetcher = || panic!("offline usage must not start a fetcher");
+        app.start_codex_login();
+        assert!(!app.is_codex_login_running());
+        app.reset_codex_rate_limits("offline-test-account");
+        assert!(app.codex_reset_rx.is_none());
+        app.maybe_refresh_remote_stats();
+        assert!(app.remote_stats_rx.is_none());
+        assert!(app.remote_stats_last_attempt.is_none());
+        app.current_tab = Tab::Usage;
+        app.refresh_usage();
+        assert!(app.usage_rx.is_none());
+        assert!(app.usage_fetch_attempted);
+        assert!(!crate::should_auto_sync_cursor_for_local_report(
+            &None, &None
+        ));
+        assert!(crate::amp::auto_sync_status().warning.is_none());
+        assert!(
+            crate::tui::remote::fetch_remote_stats("fixture", "fixture", "http://127.0.0.1:9")
+                .unwrap_err()
+                .to_string()
+                .contains("offline")
+        );
+
+        app.background_loading = false;
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+        terminal
+            .draw(|frame| crate::tui::ui::render(frame, &mut app))
+            .unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(
+            rendered.contains("Offline: showing cached usage"),
+            "{rendered}"
+        );
     }
 
     #[test]
@@ -5794,6 +5868,7 @@ mod tests {
             client: "claude".to_string(),
             workspace_key: workspace.map(String::from),
             workspace_label: workspace.map(String::from),
+            machine: None,
             tokens: TokenBreakdown::default(),
             cost,
             performance: Default::default(),
@@ -5947,6 +6022,7 @@ mod tests {
                 client: "claude".to_string(),
                 workspace_key: None,
                 workspace_label: None,
+                machine: None,
                 tokens: TokenBreakdown::default(),
                 cost: 10.0,
                 performance: Default::default(),
@@ -5961,6 +6037,7 @@ mod tests {
                 client: "codex".to_string(),
                 workspace_key: None,
                 workspace_label: None,
+                machine: None,
                 tokens: TokenBreakdown::default(),
                 cost: 1.0,
                 performance: Default::default(),
@@ -6020,6 +6097,7 @@ mod tests {
                 client: "claude".to_string(),
                 workspace_key: None,
                 workspace_label: None,
+                machine: None,
                 tokens: TokenBreakdown::default(),
                 cost: 10.0,
                 performance: Default::default(),
@@ -6034,6 +6112,7 @@ mod tests {
                 client: "codex".to_string(),
                 workspace_key: None,
                 workspace_label: None,
+                machine: None,
                 tokens: TokenBreakdown::default(),
                 cost: 5.0,
                 performance: Default::default(),
@@ -6072,6 +6151,7 @@ mod tests {
             client: "opencode".to_string(),
             workspace_key: None,
             workspace_label: None,
+            machine: None,
             tokens: TokenBreakdown::default(),
             cost: 3.0,
             performance: Default::default(),
